@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool, Int32
 from std_msgs.msg import Float32MultiArray
+from geometry_msgs.msg import PointStamped
 
 
 class MasterNode(Node):
@@ -24,12 +25,13 @@ class MasterNode(Node):
         self._last_grab_target = None
         self._last_place_target = None
         self._initialized = False
+        self._repeat_timer = None
 
         # Publishers
         self.pub_move = self.create_publisher(Int32, 'move_command', 10)
         self.pub_arm_detect = self.create_publisher(Int32, 'arm_to_detect', 10)
-        self.pub_grab = self.create_publisher(Float32MultiArray, 'grab_target', 10)
-        self.pub_place = self.create_publisher(Float32MultiArray, 'place_target', 10)
+        self.pub_grab = self.create_publisher(PointStamped, 'grab_target', 10)
+        self.pub_place = self.create_publisher(PointStamped, 'place_target', 10)
         self.pub_start_detect = self.create_publisher(Bool, 'start_detection', 10)
         self.pub_start_placement = self.create_publisher(Bool, 'start_placement_detection', 10)
 
@@ -136,16 +138,39 @@ class MasterNode(Node):
         self.get_logger().info(f'發佈 arm_to_detect = {pos} ({label})')
 
     def _publish_grab(self, x, y, z):
-        msg = Float32MultiArray()
-        msg.data = [float(x), float(y), float(z)]
+        msg = PointStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'camera_frame'
+        msg.point.x = float(x)
+        msg.point.y = float(y)
+        msg.point.z = float(z)
         self.pub_grab.publish(msg)
-        self.get_logger().info(f'發佈 grab_target = [{x:.3f}, {y:.3f}, {z:.3f}]')
+        self.get_logger().info(f'發佈 grab_target = [{x:.3f}, {y:.3f}, {z:.3f}] (camera_frame)')
 
     def _publish_place(self, x, y, z):
-        msg = Float32MultiArray()
-        msg.data = [float(x), float(y), float(z)]
+        msg = PointStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'camera_frame'
+        msg.point.x = float(x)
+        msg.point.y = float(y)
+        msg.point.z = float(z)
         self.pub_place.publish(msg)
-        self.get_logger().info(f'發佈 place_target = [{x:.3f}, {y:.3f}, {z:.3f}]')
+        self.get_logger().info(f'發佈 place_target = [{x:.3f}, {y:.3f}, {z:.3f}] (camera_frame)')
+
+    def _start_repeat_grab(self, x, y, z):
+        self._cancel_repeat()
+        self._publish_grab(x, y, z)
+        self._repeat_timer = self.create_timer(0.5, lambda: self._publish_grab(x, y, z))
+
+    def _start_repeat_place(self, x, y, z):
+        self._cancel_repeat()
+        self._publish_place(x, y, z)
+        self._repeat_timer = self.create_timer(0.5, lambda: self._publish_place(x, y, z))
+
+    def _cancel_repeat(self):
+        if self._repeat_timer:
+            self._repeat_timer.cancel()
+            self._repeat_timer = None
 
     # ── Subscriber Callbacks ─────────────────────────────────
 
@@ -221,6 +246,7 @@ class MasterNode(Node):
         if self.state != 'WAIT_GRAB':
             return
         self._cancel_timeout()
+        self._cancel_repeat()
         self.get_logger().info(f'抓取完成（ID={self.holding}），前往放置區 B')
         self._publish_move(1)
         self._transition('WAIT_ARRIVE_PLACE')
@@ -232,6 +258,7 @@ class MasterNode(Node):
         if self.state != 'WAIT_PLACE':
             return
         self._cancel_timeout()
+        self._cancel_repeat()
         self.get_logger().info(f'放置完成（ID={self.holding}）')
         self.holding = None
         self._transition('CHECK_DONE')
@@ -250,7 +277,7 @@ class MasterNode(Node):
             self._last_grab_target = (x, y, z)
             self.get_logger().info(
                 f'選中目標: ID={obj_id}, X={x:.3f}, Y={y:.3f}, Z={z:.3f}')
-            self._publish_grab(x, y, z)
+            self._start_repeat_grab(x, y, z)
             self._transition('WAIT_GRAB')
             self._start_timeout(30)
         else:
@@ -266,7 +293,7 @@ class MasterNode(Node):
             self._last_place_target = coords
             self.get_logger().info(
                 f'放置位置: ID={self.holding}, X={x:.3f}, Y={y:.3f}, Z={z:.3f}')
-            self._publish_place(x, y, z)
+            self._start_repeat_place(x, y, z)
             self._transition('WAIT_PLACE')
             self._start_timeout(30)
         else:

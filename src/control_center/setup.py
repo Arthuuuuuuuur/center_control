@@ -25,6 +25,9 @@ setup(
     entry_points={
         'console_scripts': [
             'master_node = control_center.master_node:main',
+            'fake_chassis = control_center.fake_chassis:main',
+            'fake_arm = control_center.fake_arm:main',
+            'fake_camera = control_center.fake_camera:main',
         ],
     },
 )
